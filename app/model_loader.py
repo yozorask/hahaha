@@ -33,11 +33,9 @@ async def fetch_and_parse_models_config() -> Optional[Dict[str, List[str]]]:
                 print("Successfully fetched and parsed model configuration.")
                 
                 # Add [EXPRESS] prefix to express models
-                prefixed_express_models = [f"[EXPRESS] {model_name}" for model_name in data["vertex_express_models"]]
-                
                 return {
                     "vertex_models": data["vertex_models"],
-                    "vertex_express_models": prefixed_express_models
+                    "vertex_express_models": data["vertex_express_models"]
                 }
             else:
                 print(f"ERROR: Fetched model configuration has an invalid structure: {data}")
