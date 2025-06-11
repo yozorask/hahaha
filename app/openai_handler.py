@@ -5,7 +5,8 @@ This module encapsulates all OpenAI-specific logic that was previously in chat_a
 import json
 import time
 import asyncio
-from typing import Dict, Any, AsyncGenerator
+import httpx
+from typing import Dict, Any, AsyncGenerator, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 import openai
@@ -21,13 +22,104 @@ from api_helpers import (
 )
 from message_processing import extract_reasoning_by_tags
 from credentials_manager import _refresh_auth
+from project_id_discovery import discover_project_id
+
+
+# Wrapper classes to mimic OpenAI SDK responses for direct httpx calls
+class FakeChatCompletionChunk:
+    """A fake ChatCompletionChunk to wrap the dictionary from a direct API stream."""
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+
+    def model_dump(self, exclude_unset=True, exclude_none=True) -> Dict[str, Any]:
+        return self._data
+
+class FakeChatCompletion:
+    """A fake ChatCompletion to wrap the dictionary from a direct non-streaming API call."""
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+
+    def model_dump(self, exclude_unset=True, exclude_none=True) -> Dict[str, Any]:
+        return self._data
+
+class ExpressClientWrapper:
+    """
+    A wrapper that mimics the openai.AsyncOpenAI client interface but uses direct
+    httpx calls for Vertex AI Express Mode. This allows it to be used with the
+    existing response handling logic.
+    """
+    def __init__(self, project_id: str, api_key: str, location: str = "global"):
+        self.project_id = project_id
+        self.api_key = api_key
+        self.location = location
+        self.base_url = f"https://aiplatform.googleapis.com/v1beta1/projects/{self.project_id}/locations/{self.location}/endpoints/openapi"
+        
+        # The 'chat.completions' structure mimics the real OpenAI client
+        self.chat = self
+        self.completions = self
+
+    async def _stream_generator(self, response: httpx.Response) -> AsyncGenerator[FakeChatCompletionChunk, None]:
+        """Processes the SSE stream from httpx and yields fake chunk objects."""
+        async for line in response.aiter_lines():
+            if line.startswith("data:"):
+                json_str = line[len("data: "):].strip()
+                if json_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(json_str)
+                    yield FakeChatCompletionChunk(data)
+                except json.JSONDecodeError:
+                    print(f"Warning: Could not decode JSON from stream line: {json_str}")
+                    continue
+
+    async def _streaming_create(self, **kwargs) -> AsyncGenerator[FakeChatCompletionChunk, None]:
+        """Handles the creation of a streaming request using httpx."""
+        endpoint = f"{self.base_url}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        params = {"key": self.api_key}
+        
+        payload = kwargs.copy()
+        if 'extra_body' in payload:
+            payload.update(payload.pop('extra_body'))
+
+        async with httpx.AsyncClient(timeout=300) as client:
+            async with client.stream("POST", endpoint, headers=headers, params=params, json=payload, timeout=None) as response:
+                response.raise_for_status()
+                async for chunk in self._stream_generator(response):
+                    yield chunk
+
+    async def create(self, **kwargs) -> Any:
+        """
+        Mimics the 'create' method of the OpenAI client.
+        It builds and sends a direct HTTP request using httpx, delegating
+        to the appropriate streaming or non-streaming handler.
+        """
+        is_streaming = kwargs.get("stream", False)
+
+        if is_streaming:
+            return self._streaming_create(**kwargs)
+        
+        # Non-streaming logic
+        endpoint = f"{self.base_url}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        params = {"key": self.api_key}
+        
+        payload = kwargs.copy()
+        if 'extra_body' in payload:
+            payload.update(payload.pop('extra_body'))
+
+        async with httpx.AsyncClient(timeout=300) as client:
+            response = await client.post(endpoint, headers=headers, params=params, json=payload, timeout=None)
+            response.raise_for_status()
+            return FakeChatCompletion(response.json())
 
 
 class OpenAIDirectHandler:
     """Handles OpenAI Direct mode operations including client creation and response processing."""
     
-    def __init__(self, credential_manager):
+    def __init__(self, credential_manager=None, express_key_manager=None):
         self.credential_manager = credential_manager
+        self.express_key_manager = express_key_manager
         self.safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
@@ -35,7 +127,7 @@ class OpenAIDirectHandler:
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
             {"category": 'HARM_CATEGORY_CIVIC_INTEGRITY', "threshold": 'OFF'}
         ]
-    
+
     def create_openai_client(self, project_id: str, gcp_token: str, location: str = "global") -> openai.AsyncOpenAI:
         """Create an OpenAI client configured for Vertex AI endpoint."""
         endpoint_url = (
@@ -80,7 +172,7 @@ class OpenAIDirectHandler:
     
     async def handle_streaming_response(
         self, 
-        openai_client: openai.AsyncOpenAI,
+        openai_client: Any, # Can be openai.AsyncOpenAI or our wrapper
         openai_params: Dict[str, Any],
         openai_extra_body: Dict[str, Any],
         request: OpenAIRequest
@@ -107,7 +199,7 @@ class OpenAIDirectHandler:
     
     async def _true_stream_generator(
         self,
-        openai_client: openai.AsyncOpenAI,
+        openai_client: Any, # Can be openai.AsyncOpenAI or our wrapper
         openai_params: Dict[str, Any],
         openai_extra_body: Dict[str, Any],
         request: OpenAIRequest
@@ -136,6 +228,7 @@ class OpenAIDirectHandler:
                         delta = choices[0].get('delta')
                         if delta and isinstance(delta, dict):
                             # Always remove extra_content if present
+                            
                             if 'extra_content' in delta:
                                 del delta['extra_content']
                             
@@ -242,7 +335,7 @@ class OpenAIDirectHandler:
     
     async def handle_non_streaming_response(
         self,
-        openai_client: openai.AsyncOpenAI,
+        openai_client: Any, # Can be openai.AsyncOpenAI or our wrapper
         openai_params: Dict[str, Any],
         openai_extra_body: Dict[str, Any],
         request: OpenAIRequest
@@ -296,44 +389,55 @@ class OpenAIDirectHandler:
                 content=create_openai_error_response(500, error_msg, "server_error")
             )
     
-    async def process_request(self, request: OpenAIRequest, base_model_name: str):
+    async def process_request(self, request: OpenAIRequest, base_model_name: str, is_express: bool = False):
         """Main entry point for processing OpenAI Direct mode requests."""
-        print(f"INFO: Using OpenAI Direct Path for model: {request.model}")
+        print(f"INFO: Using OpenAI Direct Path for model: {request.model} (Express: {is_express})")
         
-        # Get credentials
-        rotated_credentials, rotated_project_id = self.credential_manager.get_credentials()
-        
-        if not rotated_credentials or not rotated_project_id:
-            error_msg = "OpenAI Direct Mode requires GCP credentials, but none were available or loaded successfully."
+        client: Any = None # Can be openai.AsyncOpenAI or our wrapper
+
+        try:
+            if is_express:
+                if not self.express_key_manager:
+                    raise Exception("Express mode requires an ExpressKeyManager, but it was not provided.")
+                
+                key_tuple = self.express_key_manager.get_express_api_key()
+                if not key_tuple:
+                    raise Exception("OpenAI Express Mode requires an API key, but none were available.")
+                
+                _, express_api_key = key_tuple
+                project_id = await discover_project_id(express_api_key)
+                
+                client = ExpressClientWrapper(project_id=project_id, api_key=express_api_key)
+                print(f"INFO: [OpenAI Express Path] Using ExpressClientWrapper for project: {project_id}")
+
+            else: # Standard SA-based OpenAI SDK Path
+                if not self.credential_manager:
+                    raise Exception("Standard OpenAI Direct mode requires a CredentialManager.")
+
+                rotated_credentials, rotated_project_id = self.credential_manager.get_credentials()
+                if not rotated_credentials or not rotated_project_id:
+                    raise Exception("OpenAI Direct Mode requires GCP credentials, but none were available.")
+
+                print(f"INFO: [OpenAI Direct Path] Using credentials for project: {rotated_project_id}")
+                gcp_token = _refresh_auth(rotated_credentials)
+                if not gcp_token:
+                    raise Exception(f"Failed to obtain valid GCP token for OpenAI client (Project: {rotated_project_id}).")
+                
+                client = self.create_openai_client(rotated_project_id, gcp_token)
+
+            model_id = f"google/{base_model_name}"
+            openai_params = self.prepare_openai_params(request, model_id)
+            openai_extra_body = self.prepare_extra_body()
+            
+            if request.stream:
+                return await self.handle_streaming_response(
+                    client, openai_params, openai_extra_body, request
+                )
+            else:
+                return await self.handle_non_streaming_response(
+                    client, openai_params, openai_extra_body, request
+                )
+        except Exception as e:
+            error_msg = f"Error in process_request for {request.model}: {e}"
             print(f"ERROR: {error_msg}")
-            return JSONResponse(
-                status_code=500, 
-                content=create_openai_error_response(500, error_msg, "server_error")
-            )
-        
-        print(f"INFO: [OpenAI Direct Path] Using credentials for project: {rotated_project_id}")
-        gcp_token = _refresh_auth(rotated_credentials)
-        
-        if not gcp_token:
-            error_msg = f"Failed to obtain valid GCP token for OpenAI client (Project: {rotated_project_id})."
-            print(f"ERROR: {error_msg}")
-            return JSONResponse(
-                status_code=500, 
-                content=create_openai_error_response(500, error_msg, "server_error")
-            )
-        
-        # Create client and prepare parameters
-        openai_client = self.create_openai_client(rotated_project_id, gcp_token)
-        model_id = f"google/{base_model_name}"
-        openai_params = self.prepare_openai_params(request, model_id)
-        openai_extra_body = self.prepare_extra_body()
-        
-        # Handle streaming vs non-streaming
-        if request.stream:
-            return await self.handle_streaming_response(
-                openai_client, openai_params, openai_extra_body, request
-            )
-        else:
-            return await self.handle_non_streaming_response(
-                openai_client, openai_params, openai_extra_body, request
-            )
+            return JSONResponse(status_code=500, content=create_openai_error_response(500, error_msg, "server_error"))

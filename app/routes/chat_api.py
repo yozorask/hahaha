@@ -46,9 +46,10 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         is_openai_direct_model = False
         if request.model.endswith(OPENAI_DIRECT_SUFFIX):
             temp_name_for_marker_check = request.model[:-len(OPENAI_DIRECT_SUFFIX)]
-            if temp_name_for_marker_check.startswith(PAY_PREFIX):
-                is_openai_direct_model = True
-            elif EXPERIMENTAL_MARKER in temp_name_for_marker_check:
+            # An OpenAI model can be prefixed with PAY, EXPRESS, or contain EXP
+            if temp_name_for_marker_check.startswith(PAY_PREFIX) or \
+               temp_name_for_marker_check.startswith(EXPRESS_PREFIX) or \
+               EXPERIMENTAL_MARKER in temp_name_for_marker_check:
                 is_openai_direct_model = True
         is_auto_model = request.model.endswith("-auto")
         is_grounded_search = request.model.endswith("-search")
@@ -175,8 +176,12 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
         if is_openai_direct_model:
             # Use the new OpenAI handler
-            openai_handler = OpenAIDirectHandler(credential_manager_instance)
-            return await openai_handler.process_request(request, base_model_name)
+            if is_express_model_request:
+                openai_handler = OpenAIDirectHandler(express_key_manager=express_key_manager_instance)
+                return await openai_handler.process_request(request, base_model_name, is_express=True)
+            else:
+                openai_handler = OpenAIDirectHandler(credential_manager=credential_manager_instance)
+                return await openai_handler.process_request(request, base_model_name)
         elif is_auto_model:
             print(f"Processing auto model: {request.model}")
             attempts = [

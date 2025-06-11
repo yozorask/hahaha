@@ -106,25 +106,32 @@ async def list_models(fastapi_request: Request, api_key: str = Depends(get_api_k
 
         # Ensure uniqueness again after adding suffixes
         # Add OpenAI direct variations if SA creds are available
-        if has_sa_creds: # OpenAI direct mode only works with SA credentials
-            # `all_model_ids` contains the comprehensive list of base models that are eligible based on current credentials
-            # We iterate through this to determine which ones get an -openai variation.
-            # `raw_vertex_models` is used here to ensure we only add -openai suffix to models that are
-            # fundamentally Vertex models, not just any model that might appear in `all_model_ids` (e.g. from Express list exclusively)
-            # if express only key is provided.
-            # We iterate through the base models from the main Vertex list.
-            for base_model_id_for_openai in raw_vertex_models: # Iterate through original list of GAIA/Vertex base models
+        # Add OpenAI direct variations for SA credentials
+        if has_sa_creds:
+            for base_model_id_for_openai in raw_vertex_models:
                 display_model_id = ""
                 if EXPERIMENTAL_MARKER in base_model_id_for_openai:
                     display_model_id = f"{base_model_id_for_openai}{OPENAI_DIRECT_SUFFIX}"
                 else:
                     display_model_id = f"{PAY_PREFIX}{base_model_id_for_openai}{OPENAI_DIRECT_SUFFIX}"
                 
-                # Check if already added (e.g. if remote config somehow already listed it or added as a base model)
                 if display_model_id and not any(m['id'] == display_model_id for m in dynamic_models_data):
                     dynamic_models_data.append({
                         "id": display_model_id, "object": "model", "created": current_time, "owned_by": "google",
                         "permission": [], "root": base_model_id_for_openai, "parent": None
+                    })
+
+        # Add OpenAI direct variations for Express keys
+        if has_express_key:
+            EXPRESS_PREFIX = "[EXPRESS] "
+            for base_model_id_for_express_openai in raw_express_models:
+                # Express models are prefixed with [EXPRESS]
+                display_model_id = f"{EXPRESS_PREFIX}{base_model_id_for_express_openai}{OPENAI_DIRECT_SUFFIX}"
+                
+                if display_model_id and not any(m['id'] == display_model_id for m in dynamic_models_data):
+                    dynamic_models_data.append({
+                        "id": display_model_id, "object": "model", "created": current_time, "owned_by": "google",
+                        "permission": [], "root": base_model_id_for_express_openai, "parent": None
                     })
     # final_models_data_map = {m["id"]: m for m in dynamic_models_data}
     # model_list = list(final_models_data_map.values())
