@@ -70,7 +70,9 @@ class OpenAIDirectHandler:
             "extra_body": {
                 'google': {
                     'safety_settings': self.safety_settings,
-                    'thought_tag_marker': VERTEX_REASONING_TAG
+                    'thought_tag_marker': VERTEX_REASONING_TAG,
+                    'thinking_config ': {"include_thoughts": True}
+                    
                 }
             }
         }
