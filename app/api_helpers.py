@@ -132,36 +132,61 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
     ]
     config["thinking_config"] = {"include_thoughts": True}
 
-    gemini_tools_list = None
+    # 1. Add tools (function declarations)
+    function_declarations = []
     if request.tools:
-        function_declarations = []
-        for tool_def in request.tools:
-            if tool_def.get("type") == "function":
-                func_dict = tool_def.get("function", {})
-                parameters_schema = func_dict.get("parameters", {})
-                try:
-                    fd = types.FunctionDeclaration(name=func_dict.get("name", ""), description=func_dict.get("description", ""), parameters=parameters_schema)
-                    function_declarations.append(fd)
-                except Exception as e: print(f"Error creating FunctionDeclaration for tool {func_dict.get('name', 'unknown')}: {e}")
-        if function_declarations: gemini_tools_list = [types.Tool(function_declarations=function_declarations)]
+        for tool in request.tools:
+            if tool.get("type") == "function":
+                # func_def = tool.get("function")
+                func_def = tool
+                if func_def:
+                    # Extract only the fields accepted by the Gemini API
+                    declaration = {
+                        "name": func_def.get("name"),
+                        "description": func_def.get("description"),
+                    }
+                    # Get parameters and remove the $schema field if it exists
+                    parameters = func_def.get("parameters")
+                    if isinstance(parameters, dict) and "$schema" in parameters:
+                        parameters = parameters.copy()
+                        del parameters["$schema"]
+                    if parameters is not None:
+                        declaration["parameters"] = parameters
 
-    gemini_tool_config_obj = None
+                    # Remove keys with None values to keep the payload clean
+                    declaration = {k: v for k, v in declaration.items() if v is not None}
+                    if declaration.get("name"):  # Ensure name exists
+                        function_declarations.append(declaration)
+
+    if function_declarations:
+        config["tools"] = [{"function_declarations": function_declarations}]
+
+    # 2. Add tool_config (based on tool_choice)
+    tool_config = None
     if request.tool_choice:
-        mode_val = types.FunctionCallingConfig.Mode.AUTO 
-        allowed_fn_names = None
-        if isinstance(request.tool_choice, str):
-            if request.tool_choice == "none": mode_val = types.FunctionCallingConfig.Mode.NONE
-            elif request.tool_choice == "required": mode_val = types.FunctionCallingConfig.Mode.ANY
-        elif isinstance(request.tool_choice, dict) and request.tool_choice.get("type") == "function":
-            func_choice_name = request.tool_choice.get("function", {}).get("name")
-            if func_choice_name:
-                mode_val = types.FunctionCallingConfig.Mode.ANY
-                allowed_fn_names = [func_choice_name]
-        fcc = types.FunctionCallingConfig(mode=mode_val, allowed_function_names=allowed_fn_names)
-        gemini_tool_config_obj = types.ToolConfig(function_calling_config=fcc)
-
-    if gemini_tools_list: config["tools"] = gemini_tools_list
-    if gemini_tool_config_obj: config["tool_config"] = gemini_tool_config_obj
+        choice = request.tool_choice
+        mode = None
+        allowed_functions = None
+        if isinstance(choice, str):
+            if choice == "none":
+                mode = "NONE"
+            elif choice == "auto":
+                mode = "AUTO"
+        elif isinstance(choice, dict) and choice.get("type") == "function":
+            func_name = choice.get("function", {}).get("name")
+            if func_name:
+                mode = "ANY"  # 'ANY' mode is used to force a specific function call
+                allowed_functions = [func_name]
+        
+        # If a valid mode was parsed, build the tool_config
+        if mode:
+            config_dict = {"mode": mode}
+            if allowed_functions:
+                config_dict["allowed_function_names"] = allowed_functions
+            tool_config = {"function_calling_config": config_dict}
+    
+    if tool_config:
+        config["tool_config"] = tool_config
         
     return config
 
