@@ -234,35 +234,47 @@ class OpenAIDirectHandler:
                             
                             content = delta.get('content', '')
                             if content:
-                                # print(f"DEBUG: Chunk {chunk_count} - Raw content: '{content}'")
                                 # Use the processor to extract reasoning
                                 processed_content, current_reasoning = reasoning_processor.process_chunk(content)
                                 
-                                # Debug logging for processing results
-                                # if processed_content or current_reasoning:
-                                #     print(f"DEBUG: Chunk {chunk_count} - Processed content: '{processed_content}', Reasoning: '{current_reasoning[:50]}...' if len(current_reasoning) > 50 else '{current_reasoning}'")
-                                
                                 # Send chunks for both reasoning and content as they arrive
-                                chunks_to_send = []
-                                
-                                # If we have reasoning content, send it
+                                original_choice = chunk_as_dict['choices'][0]
+                                original_finish_reason = original_choice.get('finish_reason')
+                                original_usage = original_choice.get('usage')
+
                                 if current_reasoning:
-                                    reasoning_chunk = chunk_as_dict.copy()
-                                    reasoning_chunk['choices'][0]['delta'] = {'reasoning_content': current_reasoning}
-                                    chunks_to_send.append(reasoning_chunk)
+                                    reasoning_delta = {'reasoning_content': current_reasoning}
+                                    reasoning_payload = {
+                                        "id": chunk_as_dict["id"], "object": chunk_as_dict["object"],
+                                        "created": chunk_as_dict["created"], "model": chunk_as_dict["model"],
+                                        "choices": [{"index": 0, "delta": reasoning_delta, "finish_reason": None}]
+                                    }
+                                    yield f"data: {json.dumps(reasoning_payload)}\n\n"
                                 
-                                # If we have regular content, send it
                                 if processed_content:
-                                    content_chunk = chunk_as_dict.copy()
-                                    content_chunk['choices'][0]['delta'] = {'content': processed_content}
-                                    chunks_to_send.append(content_chunk)
+                                    content_delta = {'content': processed_content}
+                                    finish_reason_for_this_content_delta = None
+                                    usage_for_this_content_delta = None
+
+                                    if original_finish_reason and not reasoning_processor.inside_tag:
+                                        finish_reason_for_this_content_delta = original_finish_reason
+                                        if original_usage:
+                                            usage_for_this_content_delta = original_usage
+                                    
+                                    content_payload = {
+                                        "id": chunk_as_dict["id"], "object": chunk_as_dict["object"],
+                                        "created": chunk_as_dict["created"], "model": chunk_as_dict["model"],
+                                        "choices": [{"index": 0, "delta": content_delta, "finish_reason": finish_reason_for_this_content_delta}]
+                                    }
+                                    if usage_for_this_content_delta:
+                                        content_payload['choices'][0]['usage'] = usage_for_this_content_delta
+                                    
+                                    yield f"data: {json.dumps(content_payload)}\n\n"
                                     has_sent_content = True
                                 
-                                # Send all chunks
-                                for chunk_to_send in chunks_to_send:
-                                    yield f"data: {json.dumps(chunk_to_send)}\n\n"
-                            else:
-                                # Still yield the chunk even if no content (could have other delta fields)
+                            elif original_choice.get('finish_reason'): # Check original_choice for finish_reason
+                                yield f"data: {json.dumps(chunk_as_dict)}\n\n"
+                            elif not content and not original_choice.get('finish_reason') :
                                 yield f"data: {json.dumps(chunk_as_dict)}\n\n"
                     else:
                         # Yield chunks without choices too (they might contain metadata)
@@ -282,44 +294,41 @@ class OpenAIDirectHandler:
             # print(f"DEBUG: Stream ended after {chunk_count} chunks. Buffer state - tag_buffer: '{reasoning_processor.tag_buffer}', "
             #       f"inside_tag: {reasoning_processor.inside_tag}, "
             #       f"reasoning_buffer: '{reasoning_processor.reasoning_buffer[:50]}...' if reasoning_processor.reasoning_buffer else ''")
-            
             # Flush any remaining buffered content
             remaining_content, remaining_reasoning = reasoning_processor.flush_remaining()
             
             # Send any remaining reasoning first
             if remaining_reasoning:
-                # print(f"DEBUG: Flushing remaining reasoning: '{remaining_reasoning[:50]}...' if len(remaining_reasoning) > 50 else '{remaining_reasoning}'")
-                reasoning_chunk = {
-                    "id": f"chatcmpl-{int(time.time())}",
+                reasoning_flush_payload = {
+                    "id": f"chatcmpl-flush-{int(time.time())}",
                     "object": "chat.completion.chunk",
                     "created": int(time.time()),
                     "model": request.model,
                     "choices": [{"index": 0, "delta": {"reasoning_content": remaining_reasoning}, "finish_reason": None}]
                 }
-                yield f"data: {json.dumps(reasoning_chunk)}\n\n"
+                yield f"data: {json.dumps(reasoning_flush_payload)}\n\n"
             
             # Send any remaining content
             if remaining_content:
-                # print(f"DEBUG: Flushing remaining content: '{remaining_content}'")
-                final_chunk = {
-                    "id": f"chatcmpl-{int(time.time())}",
+                content_flush_payload = {
+                    "id": f"chatcmpl-flush-{int(time.time())}",
                     "object": "chat.completion.chunk",
                     "created": int(time.time()),
                     "model": request.model,
                     "choices": [{"index": 0, "delta": {"content": remaining_content}, "finish_reason": None}]
                 }
-                yield f"data: {json.dumps(final_chunk)}\n\n"
+                yield f"data: {json.dumps(content_flush_payload)}\n\n"
                 has_sent_content = True
             
             # Always send a finish reason chunk
-            finish_chunk = {
-                "id": f"chatcmpl-{int(time.time())}",
+            finish_payload = {
+                "id": f"chatcmpl-final-{int(time.time())}", # Kilo Code: Changed ID for clarity
                 "object": "chat.completion.chunk",
                 "created": int(time.time()),
                 "model": request.model,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
             }
-            yield f"data: {json.dumps(finish_chunk)}\n\n"
+            yield f"data: {json.dumps(finish_payload)}\n\n"
             
             yield "data: [DONE]\n\n"
             

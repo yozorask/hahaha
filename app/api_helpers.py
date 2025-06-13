@@ -9,26 +9,25 @@ from typing import List, Dict, Any, Callable, Union, Optional
 from fastapi.responses import JSONResponse, StreamingResponse
 from google.auth.transport.requests import Request as AuthRequest
 from google.genai import types
-from google.genai.types import HttpOptions
+from google.genai.types import GenerateContentResponse 
 from google import genai
-from openai import AsyncOpenAI # For type hinting
+from openai import AsyncOpenAI 
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall, ChoiceDeltaToolCallFunction
 
 from models import OpenAIRequest, OpenAIMessage
 from message_processing import (
     deobfuscate_text,
-    convert_to_openai_format, # This is our process_gemini_response_to_openai_dict
-    convert_chunk_to_openai,  # For true Gemini streaming
+    convert_to_openai_format, 
+    convert_chunk_to_openai,
     create_final_chunk,
-    parse_gemini_response_for_reasoning_and_content, # Used by convert_to_openai_format
-    extract_reasoning_by_tags # Used by older OpenAI direct fake streamer
+    parse_gemini_response_for_reasoning_and_content, 
+    extract_reasoning_by_tags
 )
 import config as app_config
 from config import VERTEX_REASONING_TAG
 
 class StreamingReasoningProcessor:
-    """Stateful processor for extracting reasoning from streaming content with tags."""
     def __init__(self, tag_name: str = VERTEX_REASONING_TAG):
         self.tag_name = tag_name
         self.open_tag = f"<{tag_name}>"
@@ -67,7 +66,7 @@ class StreamingReasoningProcessor:
                     processed_content += self.tag_buffer[:open_pos]
                     self.tag_buffer = self.tag_buffer[open_pos + len(self.open_tag):]
                     self.inside_tag = True
-            else: # Inside tag
+            else: 
                 close_pos = self.tag_buffer.find(self.close_tag)
                 if close_pos == -1:
                     partial_match = False
@@ -115,15 +114,13 @@ def create_openai_error_response(status_code: int, message: str, error_type: str
     return {"error": {"message": message, "type": error_type, "code": status_code, "param": None}}
 
 def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
-    config = {}
+    config: Dict[str, Any] = {} 
     if request.temperature is not None: config["temperature"] = request.temperature
     if request.max_tokens is not None: config["max_output_tokens"] = request.max_tokens
     if request.top_p is not None: config["top_p"] = request.top_p
     if request.top_k is not None: config["top_k"] = request.top_k
     if request.stop is not None: config["stop_sequences"] = request.stop
     if request.seed is not None: config["seed"] = request.seed
-    if request.presence_penalty is not None: config["presence_penalty"] = request.presence_penalty
-    if request.frequency_penalty is not None: config["frequency_penalty"] = request.frequency_penalty
     if request.n is not None: config["candidate_count"] = request.n
     
     config["safety_settings"] = [
@@ -133,9 +130,9 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
             types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
             types.SafetySetting(category="HARM_CATEGORY_CIVIC_INTEGRITY", threshold="OFF")
     ]
-    config["thinking_config"] = types.ThinkingConfig(include_thoughts=True)
+    config["thinking_config"] = {"include_thoughts": True}
 
-    gemini_tools_list, gemini_tool_config_obj = None, None
+    gemini_tools_list = None
     if request.tools:
         function_declarations = []
         for tool_def in request.tools:
@@ -148,6 +145,7 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
                 except Exception as e: print(f"Error creating FunctionDeclaration for tool {func_dict.get('name', 'unknown')}: {e}")
         if function_declarations: gemini_tools_list = [types.Tool(function_declarations=function_declarations)]
 
+    gemini_tool_config_obj = None
     if request.tool_choice:
         mode_val = types.FunctionCallingConfig.Mode.AUTO 
         allowed_fn_names = None
@@ -162,9 +160,11 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
         fcc = types.FunctionCallingConfig(mode=mode_val, allowed_function_names=allowed_fn_names)
         gemini_tool_config_obj = types.ToolConfig(function_calling_config=fcc)
 
-    if gemini_tools_list: config["gemini_tools"] = gemini_tools_list
-    if gemini_tool_config_obj: config["gemini_tool_config"] = gemini_tool_config_obj
+    if gemini_tools_list: config["tools"] = gemini_tools_list
+    if gemini_tool_config_obj: config["tool_config"] = gemini_tool_config_obj
+        
     return config
+
 
 def is_gemini_response_valid(response: Any) -> bool:
     if response is None: return False
@@ -183,50 +183,47 @@ async def _chunk_openai_response_dict_for_sse(
     response_id_override: Optional[str] = None, 
     model_name_override: Optional[str] = None
 ):
-    """Helper to chunk a complete OpenAI-formatted dictionary for SSE."""
     resp_id = response_id_override or openai_response_dict.get("id", f"chatcmpl-fakestream-{int(time.time())}")
     model_name = model_name_override or openai_response_dict.get("model", "unknown")
     created_time = openai_response_dict.get("created", int(time.time()))
     
     choices = openai_response_dict.get("choices", [])
-    if not choices: # Should not happen if openai_response_dict is valid
+    if not choices: 
         yield f"data: {json.dumps({'id': resp_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'error'}]})}\n\n"
         yield "data: [DONE]\n\n"
         return
 
-    for choice_idx, choice in enumerate(choices): # Support multiple choices (n > 1)
+    for choice_idx, choice in enumerate(choices): 
         message = choice.get("message", {})
         final_finish_reason = choice.get("finish_reason", "stop")
 
         if message.get("tool_calls"):
             tool_calls_list = message.get("tool_calls", [])
             for tc_item_idx, tool_call_item in enumerate(tool_calls_list):
-                # Delta 1: Tool call structure (name)
                 delta_tc_start = {
                     "tool_calls": [{
-                        "index": tc_item_idx, # Index of the tool_call in the list
+                        "index": tc_item_idx, 
                         "id": tool_call_item["id"],
                         "type": "function",
                         "function": {"name": tool_call_item["function"]["name"], "arguments": ""}
                     }]
                 }
                 yield f"data: {json.dumps({'id': resp_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': choice_idx, 'delta': delta_tc_start, 'finish_reason': None}]})}\n\n"
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.01) 
 
-                # Delta 2: Tool call arguments
                 delta_tc_args = {
                     "tool_calls": [{
                         "index": tc_item_idx,
-                        "id": tool_call_item["id"], # ID can be repeated
+                        "id": tool_call_item["id"], 
                         "function": {"arguments": tool_call_item["function"]["arguments"]}
                     }]
                 }
                 yield f"data: {json.dumps({'id': resp_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': choice_idx, 'delta': delta_tc_args, 'finish_reason': None}]})}\n\n"
                 await asyncio.sleep(0.01)
         
-        elif message.get("content") is not None or message.get("reasoning_content") is not None : # Regular content
+        elif message.get("content") is not None or message.get("reasoning_content") is not None : 
             reasoning_content = message.get("reasoning_content", "")
-            actual_content = message.get("content", "") # Can be None
+            actual_content = message.get("content") 
 
             if reasoning_content:
                 delta_reasoning = {"reasoning_content": reasoning_content}
@@ -236,14 +233,13 @@ async def _chunk_openai_response_dict_for_sse(
             content_to_chunk = actual_content if actual_content is not None else ""
             if actual_content is not None:
                 chunk_size = max(1, math.ceil(len(content_to_chunk) / 10)) if content_to_chunk else 1
-                if not content_to_chunk and not reasoning_content : # Empty string content
+                if not content_to_chunk and not reasoning_content : 
                     yield f"data: {json.dumps({'id': resp_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': choice_idx, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
                 else:
                     for i in range(0, len(content_to_chunk), chunk_size):
                         yield f"data: {json.dumps({'id': resp_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': choice_idx, 'delta': {'content': content_to_chunk[i:i+chunk_size]}, 'finish_reason': None}]})}\n\n"
                         if len(content_to_chunk) > chunk_size: await asyncio.sleep(0.05)
         
-        # Final delta for this choice with finish_reason
         yield f"data: {json.dumps({'id': resp_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': choice_idx, 'delta': {}, 'finish_reason': final_finish_reason}]})}\n\n"
 
     yield "data: [DONE]\n\n"
@@ -252,25 +248,19 @@ async def _chunk_openai_response_dict_for_sse(
 async def gemini_fake_stream_generator( 
     gemini_client_instance: Any, 
     model_for_api_call: str, 
-    prompt_for_api_call: Union[types.Content, List[types.Content]],
-    gen_config_for_api_call: Dict[str, Any], 
+    prompt_for_api_call: List[types.Content],
+    gen_config_dict_for_api_call: Dict[str, Any], 
     request_obj: OpenAIRequest,
     is_auto_attempt: bool
 ):
     model_name_for_log = getattr(gemini_client_instance, 'model_name', 'unknown_gemini_model_object')
     print(f"FAKE STREAMING (Gemini): Prep for '{request_obj.model}' (API model string: '{model_for_api_call}', client obj: '{model_name_for_log}')")
     
-    internal_tools_param = gen_config_for_api_call.pop('gemini_tools', None)
-    internal_tool_config_param = gen_config_for_api_call.pop('gemini_tool_config', None)
-    internal_sdk_generation_config = gen_config_for_api_call
-
     api_call_task = asyncio.create_task(
         gemini_client_instance.aio.models.generate_content(
             model=model_for_api_call, 
             contents=prompt_for_api_call, 
-            generation_config=internal_sdk_generation_config,
-            tools=internal_tools_param,
-            tool_config=internal_tool_config_param
+            config=gen_config_dict_for_api_call # Pass the dictionary directly
         )
     )
 
@@ -295,8 +285,7 @@ async def gemini_fake_stream_generator(
             raise ValueError(block_message)
 
         async for chunk_sse in _chunk_openai_response_dict_for_sse(
-            openai_response_dict=openai_response_dict,
-            is_auto_attempt=is_auto_attempt # is_auto_attempt is not used by _chunk_openai_response_dict_for_sse directly but good to keep context
+            openai_response_dict=openai_response_dict
         ):
             yield chunk_sse
 
@@ -314,21 +303,19 @@ async def gemini_fake_stream_generator(
 
 
 async def openai_fake_stream_generator( 
-    openai_client: Union[AsyncOpenAI, Any], # Allow FakeChatCompletion/ExpressClientWrapper
+    openai_client: Union[AsyncOpenAI, Any], 
     openai_params: Dict[str, Any],
     openai_extra_body: Dict[str, Any],
     request_obj: OpenAIRequest,
-    is_auto_attempt: bool # Though auto-mode is less likely for OpenAI direct path
+    is_auto_attempt: bool
 ):
     api_model_name = openai_params.get("model", "unknown-openai-model")
     print(f"FAKE STREAMING (OpenAI Direct): Prep for '{request_obj.model}' (API model: '{api_model_name}')")
     response_id = f"chatcmpl-openaidirectfake-{int(time.time())}"
     
     async def _openai_api_call_task():
-        # This call is to an OpenAI-compatible endpoint (Vertex's /openapi)
-        # It should return an object that mimics OpenAI's SDK response or can be dumped to a dict.
         params_for_call = openai_params.copy()
-        params_for_call['stream'] = False # Ensure non-streaming for the internal call
+        params_for_call['stream'] = False 
         return await openai_client.chat.completions.create(**params_for_call, extra_body=openai_extra_body)
 
     api_call_task = asyncio.create_task(_openai_api_call_task())
@@ -340,35 +327,27 @@ async def openai_fake_stream_generator(
             await asyncio.sleep(outer_keep_alive_interval)
 
     try:
-        # raw_response_obj is an OpenAI SDK-like object (e.g. openai.types.chat.ChatCompletion or our FakeChatCompletion)
         raw_response_obj = await api_call_task 
-        
-        # Convert the OpenAI SDK-like object to a standard dictionary.
-        # The .model_dump() method is standard for Pydantic models (which OpenAI SDK uses)
-        # and our FakeChatCompletion also implements it.
         openai_response_dict = raw_response_obj.model_dump(exclude_unset=True, exclude_none=True)
 
-        # The Vertex OpenAI endpoint might embed reasoning within the content using tags.
-        # If so, extract it. This part is specific to how Vertex /openapi endpoint handles reasoning.
-        # If it's a true OpenAI model or an endpoint that doesn't use these tags, this will do nothing.
         if openai_response_dict.get("choices") and \
-           openai_response_dict["choices"].get("message", {}).get("content"):
+           isinstance(openai_response_dict["choices"], list) and \
+           len(openai_response_dict["choices"]) > 0:
             
-            original_content = openai_response_dict["choices"]["message"]["content"]
-            # Ensure extract_reasoning_by_tags handles None or non-string gracefully
-            if isinstance(original_content, str):
-                reasoning_text, actual_content = extract_reasoning_by_tags(original_content, VERTEX_REASONING_TAG)
-                openai_response_dict["choices"]["message"]["content"] = actual_content
-                if reasoning_text: # Add reasoning_content if found
-                    openai_response_dict["choices"]["message"]["reasoning_content"] = reasoning_text
-            # If content is not a string (e.g., already None due to tool_calls), skip tag extraction.
-
-        # Now, chunk this openai_response_dict using the common chunking helper
+            first_choice_dict_item = openai_response_dict["choices"] 
+            if first_choice_dict_item and isinstance(first_choice_dict_item, dict) : 
+                choice_message_ref = first_choice_dict_item.get("message", {}) 
+                original_content = choice_message_ref.get("content")
+                if isinstance(original_content, str):
+                    reasoning_text, actual_content = extract_reasoning_by_tags(original_content, VERTEX_REASONING_TAG)
+                    choice_message_ref["content"] = actual_content
+                    if reasoning_text: 
+                        choice_message_ref["reasoning_content"] = reasoning_text
+        
         async for chunk_sse in _chunk_openai_response_dict_for_sse(
             openai_response_dict=openai_response_dict,
-            response_id_override=response_id, # Use the one generated for this fake stream
-            model_name_override=request_obj.model, # Use the original request model name for SSE
-            # is_auto_attempt is not directly used by _chunk_openai_response_dict_for_sse
+            response_id_override=response_id, 
+            model_name_override=request_obj.model
         ):
             yield chunk_sse
             
@@ -389,40 +368,31 @@ async def execute_gemini_call(
     current_client: Any, 
     model_to_call: str,  
     prompt_func: Callable[[List[OpenAIMessage]], List[types.Content]], 
-    gen_config_for_call: Dict[str, Any], 
+    gen_config_dict: Dict[str, Any], 
     request_obj: OpenAIRequest, 
     is_auto_attempt: bool = False
 ):
     actual_prompt_for_call = prompt_func(request_obj.messages)
     client_model_name_for_log = getattr(current_client, 'model_name', 'unknown_direct_client_object')
     print(f"INFO: execute_gemini_call for requested API model '{model_to_call}', using client object with internal name '{client_model_name_for_log}'. Original request model: '{request_obj.model}'")
-
-    # For true streaming and non-streaming, tools/tool_config are passed as top-level args.
-    # For fake streaming, gemini_fake_stream_generator will handle extracting them from its gen_config_for_api_call.
     
     if request_obj.stream:
         if app_config.FAKE_STREAMING_ENABLED:
-            # Pass the full gen_config_for_call, as gemini_fake_stream_generator
-            # will extract gemini_tools and gemini_tool_config internally for its non-streaming call.
             return StreamingResponse(
                 gemini_fake_stream_generator(
                     current_client, model_to_call, actual_prompt_for_call,
-                    gen_config_for_call.copy(), # Pass a copy to avoid modification issues if any
+                    gen_config_dict, 
                     request_obj, is_auto_attempt
                 ), media_type="text/event-stream"
             )
         else: # True Streaming
-            gemini_tools_param = gen_config_for_call.pop('gemini_tools', None)
-            gemini_tool_config_param = gen_config_for_call.pop('gemini_tool_config', None)
-            sdk_generation_config = gen_config_for_call # Remainder is for generation_config
-
             response_id_for_stream = f"chatcmpl-realstream-{int(time.time())}"
             async def _gemini_real_stream_generator_inner():
                 try:
                     stream_gen_obj = await current_client.aio.models.generate_content_stream(
-                        model=model_to_call, contents=actual_prompt_for_call,
-                        generation_config=sdk_generation_config,
-                        tools=gemini_tools_param, tool_config=gemini_tool_config_param
+                        model=model_to_call, 
+                        contents=actual_prompt_for_call,
+                        config=gen_config_dict # Pass the dictionary directly
                     )
                     async for chunk_item_call in stream_gen_obj:
                         yield convert_chunk_to_openai(chunk_item_call, request_obj.model, response_id_for_stream, 0)
@@ -433,20 +403,16 @@ async def execute_gemini_call(
                     s_err = str(e_stream_call); s_err = s_err[:1024]+"..." if len(s_err)>1024 else s_err
                     err_resp = create_openai_error_response(500,s_err,"server_error")
                     j_err = json.dumps(err_resp)
-                    if not is_auto_attempt:
+                    if not is_auto_attempt: 
                         yield f"data: {j_err}\n\n"
                         yield "data: [DONE]\n\n"
                     raise e_stream_call
             return StreamingResponse(_gemini_real_stream_generator_inner(), media_type="text/event-stream")
     else: # Non-streaming
-        gemini_tools_param = gen_config_for_call.pop('gemini_tools', None)
-        gemini_tool_config_param = gen_config_for_call.pop('gemini_tool_config', None)
-        sdk_generation_config = gen_config_for_call # Remainder
-
         response_obj_call = await current_client.aio.models.generate_content(
-            model=model_to_call, contents=actual_prompt_for_call,
-            generation_config=sdk_generation_config,
-            tools=gemini_tools_param, tool_config=gemini_tool_config_param
+            model=model_to_call, 
+            contents=actual_prompt_for_call,
+            config=gen_config_dict # Pass the dictionary directly
         )
         if hasattr(response_obj_call, 'prompt_feedback') and \
            hasattr(response_obj_call.prompt_feedback, 'block_reason') and \
@@ -459,24 +425,24 @@ async def execute_gemini_call(
         
         if not is_gemini_response_valid(response_obj_call):
             error_details = f"Invalid non-streaming Gemini response for model string '{model_to_call}'. "
-            # ... (error detail extraction logic remains same)
             if hasattr(response_obj_call, 'candidates'):
                 error_details += f"Candidates: {len(response_obj_call.candidates) if response_obj_call.candidates else 0}. "
                 if response_obj_call.candidates and len(response_obj_call.candidates) > 0:
-                    candidate = response_obj_call.candidates # Check first candidate
+                    candidate = response_obj_call.candidates if isinstance(response_obj_call.candidates, list) else response_obj_call.candidates
                     if hasattr(candidate, 'content'):
                         error_details += "Has content. "
                         if hasattr(candidate.content, 'parts'):
                             error_details += f"Parts: {len(candidate.content.parts) if candidate.content.parts else 0}. "
                             if candidate.content.parts and len(candidate.content.parts) > 0:
-                                part = candidate.content.parts # Check first part
+                                part = candidate.content.parts if isinstance(candidate.content.parts, list) else candidate.content.parts
                                 if hasattr(part, 'text'):
                                     text_preview = str(getattr(part, 'text', ''))[:100]
                                     error_details += f"First part text: '{text_preview}'"
                                 elif hasattr(part, 'function_call'):
                                     error_details += f"First part is function_call: {part.function_call.name}"
-
             else:
                 error_details += f"Response type: {type(response_obj_call).__name__}"
             raise ValueError(error_details)
-        return JSONResponse(content=convert_to_openai_format(response_obj_call, request_obj.model))
+        
+        openai_response_content = convert_to_openai_format(response_obj_call, request_obj.model)
+        return JSONResponse(content=openai_response_content)

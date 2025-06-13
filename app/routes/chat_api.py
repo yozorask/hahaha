@@ -19,7 +19,7 @@ from message_processing import (
     ENCRYPTION_INSTRUCTIONS,
 )
 from api_helpers import (
-    create_generation_config,
+    create_generation_config, # Corrected import name
     create_openai_error_response,
     execute_gemini_call,
 )
@@ -94,7 +94,8 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         if is_max_thinking_model and not (base_model_name.startswith("gemini-2.5-flash") or base_model_name == "gemini-2.5-pro-preview-06-05"):
             return JSONResponse(status_code=400, content=create_openai_error_response(400, f"Model '{request.model}' (-max) is only supported for models starting with 'gemini-2.5-flash' or 'gemini-2.5-pro-preview-06-05'.", "invalid_request_error"))
 
-        generation_config = create_generation_config(request)
+        # This will now be a dictionary
+        gen_config_dict = create_generation_config(request)
 
         client_to_use = None
         express_key_manager_instance = fastapi_request.app.state.express_key_manager
@@ -192,10 +193,11 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             last_err = None
             for attempt in attempts:
                 print(f"Auto-mode attempting: '{attempt['name']}' for model {attempt['model']}")
-                current_gen_config = attempt["config_modifier"](generation_config.copy())
+                # Apply modifier to the dictionary. Ensure modifier returns a dict.
+                current_gen_config_dict = attempt["config_modifier"](gen_config_dict.copy())
                 try:
                     # Pass is_auto_attempt=True for auto-mode calls
-                    result = await execute_gemini_call(client_to_use, attempt["model"], attempt["prompt_func"], current_gen_config, request, is_auto_attempt=True)
+                    result = await execute_gemini_call(client_to_use, attempt["model"], attempt["prompt_func"], current_gen_config_dict, request, is_auto_attempt=True)
                     return result
                 except Exception as e_auto:
                     last_err = e_auto
@@ -224,33 +226,35 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
             if is_grounded_search:
                 search_tool = types.Tool(google_search=types.GoogleSearch())
-                generation_config["tools"] = [search_tool]
+                # Add or update the 'tools' key in the gen_config_dict
+                if "tools" in gen_config_dict and isinstance(gen_config_dict["tools"], list):
+                    gen_config_dict["tools"].append(search_tool)
+                else:
+                    gen_config_dict["tools"] = [search_tool]
+            
+            # For encrypted models, system instructions are handled by the prompt_func
             elif is_encrypted_model:
-                generation_config["system_instruction"] = ENCRYPTION_INSTRUCTIONS
                 current_prompt_func = create_encrypted_gemini_prompt
             elif is_encrypted_full_model:
-                generation_config["system_instruction"] = ENCRYPTION_INSTRUCTIONS
                 current_prompt_func = create_encrypted_full_gemini_prompt
-            elif is_nothinking_model:
-                if base_model_name == "gemini-2.5-pro-preview-06-05":
-                    generation_config["thinking_config"] = {"thinking_budget": 128}
+            
+            # For -nothinking or -max, the thinking_config is already set in create_generation_config
+            # or can be adjusted here if needed, but it's part of the dictionary.
+            # Example: if is_nothinking_model: gen_config_dict["thinking_config"] = {"thinking_budget": 0}
+            # This is already handled by create_generation_config based on current logic.
+            # If specific overrides are needed here, they would modify gen_config_dict.
+            if is_nothinking_model:
+                if base_model_name == "gemini-2.5-pro-preview-06-05": # Example specific override
+                    gen_config_dict["thinking_config"] = {"thinking_budget": 128}
                 else:
-                    generation_config["thinking_config"] = {"thinking_budget": 0}
+                    gen_config_dict["thinking_config"] = {"thinking_budget": 0}
             elif is_max_thinking_model:
                 if base_model_name == "gemini-2.5-pro-preview-06-05":
-                    generation_config["thinking_config"] = {"thinking_budget": 32768}
+                    gen_config_dict["thinking_config"] = {"thinking_budget": 32768}
                 else:
-                    generation_config["thinking_config"] = {"thinking_budget": 24576}
-            
-            # For non-auto models, the 'base_model_name' might have suffix stripped.
-            # We should use the original 'request.model' for API call if it's a suffixed one,
-            # or 'base_model_name' if it's truly a base model without suffixes.
-            # The current logic uses 'base_model_name' for the API call in the 'else' block.
-            # This means if `request.model` was "gemini-1.5-pro-search", `base_model_name` becomes "gemini-1.5-pro"
-            # but the API call might need the full "gemini-1.5-pro-search".
-            # Let's use `request.model` for the API call here, and `base_model_name` for checks like Express eligibility.
-            # For non-auto mode, is_auto_attempt defaults to False in execute_gemini_call
-            return await execute_gemini_call(client_to_use, base_model_name, current_prompt_func, generation_config, request)
+                    gen_config_dict["thinking_config"] = {"thinking_budget": 24576}
+
+            return await execute_gemini_call(client_to_use, base_model_name, current_prompt_func, gen_config_dict, request)
 
     except Exception as e:
         error_msg = f"Unexpected error in chat_completions endpoint: {str(e)}"

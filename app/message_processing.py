@@ -311,18 +311,20 @@ def parse_gemini_response_for_reasoning_and_content(gemini_response_candidate: A
 
     if gemini_candidate_content and hasattr(gemini_candidate_content, 'parts') and gemini_candidate_content.parts:
         for part_item in gemini_candidate_content.parts:
-            if hasattr(part_item, 'function_call'): # Ignore function call parts here
-                continue 
+            if hasattr(part_item, 'function_call') and part_item.function_call is not None: # Kilo Code: Added 'is not None' check
+                continue
             
             part_text = ""
             if hasattr(part_item, 'text') and part_item.text is not None:
                 part_text = str(part_item.text)
             
-            if hasattr(part_item, 'thought') and part_item.thought is True:
+            part_is_thought = hasattr(part_item, 'thought') and part_item.thought is True
+
+            if part_is_thought:
                 reasoning_text_parts.append(part_text)
             elif part_text: # Only add if it's not a function_call and has text
                 normal_text_parts.append(part_text)
-    elif candidate_part_text: 
+    elif candidate_part_text:
         normal_text_parts.append(candidate_part_text)
     elif gemini_candidate_content and hasattr(gemini_candidate_content, 'text') and gemini_candidate_content.text is not None:
         normal_text_parts.append(str(gemini_candidate_content.text))
@@ -358,7 +360,7 @@ def process_gemini_response_to_openai_dict(gemini_response_obj: Any, request_mod
             function_call_detected = False
             if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
                 for part in candidate.content.parts:
-                    if hasattr(part, 'function_call'):
+                    if hasattr(part, 'function_call') and part.function_call is not None: # Kilo Code: Added 'is not None' check
                         fc = part.function_call
                         tool_call_id = f"call_{base_id}_{i}_{fc.name.replace(' ', '_')}_{int(time.time()*10000 + random.randint(0,9999))}"
                         
@@ -450,7 +452,7 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
         function_call_detected_in_chunk = False
         if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
             for part in candidate.content.parts:
-                if hasattr(part, 'function_call'):
+                if hasattr(part, 'function_call') and part.function_call is not None: # Kilo Code: Added 'is not None' check
                     fc = part.function_call
                     tool_call_id = f"call_{response_id}_{candidate_index}_{fc.name.replace(' ', '_')}_{int(time.time()*10000 + random.randint(0,9999))}"
                     
@@ -475,7 +477,10 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
                     break 
 
         if not function_call_detected_in_chunk:
-            reasoning_text, normal_text = parse_gemini_response_for_reasoning_and_content(candidate)
+            if candidate and len(candidate) > 0: # Kilo Code: Ensure candidate list is not empty
+                reasoning_text, normal_text = parse_gemini_response_for_reasoning_and_content(candidate[0]) # Kilo Code: Pass the first Candidate object
+            else:
+                reasoning_text, normal_text = "", "" # Default to empty if no candidates
             if is_encrypt_full:
                 reasoning_text = deobfuscate_text(reasoning_text)
                 normal_text = deobfuscate_text(normal_text)
@@ -488,6 +493,8 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
                 delta_payload['content'] = ""
     
     if not delta_payload and openai_finish_reason is None:
+        # This case ensures that even if a chunk is completely empty (e.g. keep-alive or error scenario not caught above)
+        # and it's not a terminal chunk, we still send a delta with empty content.
         delta_payload['content'] = ""
 
     chunk_data = {
