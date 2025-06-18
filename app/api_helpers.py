@@ -130,7 +130,7 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
             types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
             types.SafetySetting(category="HARM_CATEGORY_CIVIC_INTEGRITY", threshold="OFF")
     ]
-    config["thinking_config"] = {"include_thoughts": True}
+    # config["thinking_config"] = {"include_thoughts": True}
 
     # 1. Add tools (function declarations)
     function_declarations = []

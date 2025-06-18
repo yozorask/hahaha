@@ -97,6 +97,11 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         # This will now be a dictionary
         gen_config_dict = create_generation_config(request)
 
+        if "gemini-2.5-flash" in base_model_name or "gemini-2.5-pro" in base_model_name:
+            if "thinking_config" not in gen_config_dict:
+                gen_config_dict["thinking_config"] = {}
+            gen_config_dict["thinking_config"]["include_thoughts"] = True
+
         if "gemini-2.5-flash-lite" in base_model_name:
             gen_config_dict["thinking_config"]["include_thoughts"] = False
 
