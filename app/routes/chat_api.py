@@ -98,7 +98,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         gen_config_dict = create_generation_config(request)
 
         if "gemini-2.5-flash-lite" in base_model_name:
-            del gen_config_dict["thinking_config"]
+            gen_config_dict["thinking_config"]["include_thoughts"] = False
 
         client_to_use = None
         express_key_manager_instance = fastapi_request.app.state.express_key_manager
@@ -257,7 +257,9 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                     gen_config_dict["thinking_config"] = {}
                 gen_config_dict["thinking_config"]["thinking_budget"] = budget
                 if "gemini-2.5-flash-lite" in base_model_name and is_max_thinking_model:
-                    gen_config_dict["ininclude_thoughts"] = True
+                    gen_config_dict["thinking_config"]["include_thoughts"] = True
+                if budget == 0:
+                    gen_config_dict["thinking_config"]["include_thoughts"] = False
 
             return await execute_gemini_call(client_to_use, base_model_name, current_prompt_func, gen_config_dict, request)
 

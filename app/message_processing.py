@@ -436,7 +436,7 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
     openai_finish_reason = None
 
     if hasattr(chunk, 'candidates') and chunk.candidates:
-        candidate = chunk.candidates # Process first candidate for streaming
+        candidate = chunk.candidates[0] # Process first candidate for streaming
         print(candidate)
         raw_gemini_finish_reason = getattr(candidate, 'finish_reason', None)
         if raw_gemini_finish_reason:
@@ -477,10 +477,7 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
                     break 
 
         if not function_call_detected_in_chunk:
-            if candidate and len(candidate) > 0: # Kilo Code: Ensure candidate list is not empty
-                reasoning_text, normal_text = parse_gemini_response_for_reasoning_and_content(candidate[0]) # Kilo Code: Pass the first Candidate object
-            else:
-                reasoning_text, normal_text = "", "" # Default to empty if no candidates
+            reasoning_text, normal_text = parse_gemini_response_for_reasoning_and_content(candidate)
             if is_encrypt_full:
                 reasoning_text = deobfuscate_text(reasoning_text)
                 normal_text = deobfuscate_text(normal_text)
