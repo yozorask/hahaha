@@ -88,11 +88,11 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         elif is_nothinking_model: base_model_name = base_model_name[:-len("-nothinking")]
         elif is_max_thinking_model: base_model_name = base_model_name[:-len("-max")]
         
-        # Specific model variant checks (if any remain exclusive and not covered dynamically)
-        if is_nothinking_model and not (base_model_name.startswith("gemini-2.5-flash") or base_model_name == "gemini-2.5-pro-preview-06-05"):
-            return JSONResponse(status_code=400, content=create_openai_error_response(400, f"Model '{request.model}' (-nothinking) is only supported for models starting with 'gemini-2.5-flash' or 'gemini-2.5-pro-preview-06-05'.", "invalid_request_error"))
-        if is_max_thinking_model and not (base_model_name.startswith("gemini-2.5-flash") or base_model_name == "gemini-2.5-pro-preview-06-05"):
-            return JSONResponse(status_code=400, content=create_openai_error_response(400, f"Model '{request.model}' (-max) is only supported for models starting with 'gemini-2.5-flash' or 'gemini-2.5-pro-preview-06-05'.", "invalid_request_error"))
+        # # Specific model variant checks (if any remain exclusive and not covered dynamically)
+        # if is_nothinking_model and not (base_model_name.startswith("gemini-2.5-flash") or base_model_name == "gemini-2.5-pro-preview-06-05"):
+        #     return JSONResponse(status_code=400, content=create_openai_error_response(400, f"Model '{request.model}' (-nothinking) is only supported for models starting with 'gemini-2.5-flash' or 'gemini-2.5-pro-preview-06-05'.", "invalid_request_error"))
+        # if is_max_thinking_model and not (base_model_name.startswith("gemini-2.5-flash") or base_model_name == "gemini-2.5-pro-preview-06-05"):
+        #     return JSONResponse(status_code=400, content=create_openai_error_response(400, f"Model '{request.model}' (-max) is only supported for models starting with 'gemini-2.5-flash' or 'gemini-2.5-pro-preview-06-05'.", "invalid_request_error"))
 
         # This will now be a dictionary
         gen_config_dict = create_generation_config(request)
@@ -244,12 +244,12 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             # This is already handled by create_generation_config based on current logic.
             # If specific overrides are needed here, they would modify gen_config_dict.
             if is_nothinking_model:
-                if base_model_name == "gemini-2.5-pro-preview-06-05": # Example specific override
+                if "gemini-2.5-pro" in base_model_name: # Example specific override
                     gen_config_dict["thinking_config"] = {"thinking_budget": 128}
                 else:
                     gen_config_dict["thinking_config"] = {"thinking_budget": 0}
             elif is_max_thinking_model:
-                if base_model_name == "gemini-2.5-pro-preview-06-05":
+                if "gemini-2.5-pro" in base_model_name:
                     gen_config_dict["thinking_config"] = {"thinking_budget": 32768}
                 else:
                     gen_config_dict["thinking_config"] = {"thinking_budget": 24576}

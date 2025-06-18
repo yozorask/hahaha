@@ -431,7 +431,6 @@ class OpenAIDirectHandler:
                 gcp_token = _refresh_auth(rotated_credentials)
                 if not gcp_token:
                     raise Exception(f"Failed to obtain valid GCP token for OpenAI client (Project: {rotated_project_id}).")
-                
                 client = self.create_openai_client(rotated_project_id, gcp_token)
 
             model_id = f"google/{base_model_name}"
