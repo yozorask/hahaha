@@ -155,7 +155,10 @@ class OpenAIDirectHandler:
         if is_openai_search:
             params['web_search_options'] = {}
             
-        return {k: v for k, v in params.items() if (v is not None)}
+        openai_params = {k: v for k, v in params.items() if v is not None}
+        if "reasoning_effort" in openai_params and openai_params["reasoning_effort"] not in ["low", "medium", "high"]:
+            del openai_params["reasoning_effort"]
+        return openai_params
     
     
     def prepare_extra_body(self) -> Dict[str, Any]:
