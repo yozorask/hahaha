@@ -155,7 +155,7 @@ class OpenAIDirectHandler:
         if is_openai_search:
             params['web_search_options'] = {}
             
-        return {k: v for k, v in params.items() if (v is not None and k != "model")}
+        return {k: v for k, v in params.items() if (v is not None and k != "model" and k != "reasoning_effort")}
     
     
     def prepare_extra_body(self) -> Dict[str, Any]:
