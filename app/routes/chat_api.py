@@ -33,6 +33,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
     try:
         credential_manager_instance = fastapi_request.app.state.credential_manager
         OPENAI_DIRECT_SUFFIX = "-openai"
+        OPENAI_SEARCH_SUFFIX = "-openaisearch"
         EXPERIMENTAL_MARKER = "-exp-"
         PAY_PREFIX = "[PAY]"
         EXPRESS_PREFIX = "[EXPRESS] " # Note the space for easier stripping
@@ -44,8 +45,11 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
         # Updated logic for is_openai_direct_model
         is_openai_direct_model = False
-        if request.model.endswith(OPENAI_DIRECT_SUFFIX):
-            temp_name_for_marker_check = request.model[:-len(OPENAI_DIRECT_SUFFIX)]
+        is_openai_search_model = False
+        if request.model.endswith(OPENAI_DIRECT_SUFFIX) or request.model.endswith(OPENAI_SEARCH_SUFFIX):
+            is_openai_search_model = request.model.endswith(OPENAI_SEARCH_SUFFIX)
+            suffix_to_remove = OPENAI_SEARCH_SUFFIX if is_openai_search_model else OPENAI_DIRECT_SUFFIX
+            temp_name_for_marker_check = request.model[:-len(suffix_to_remove)]
             # An OpenAI model can be prefixed with PAY, EXPRESS, or contain EXP
             if temp_name_for_marker_check.startswith(PAY_PREFIX) or \
                temp_name_for_marker_check.startswith(EXPRESS_PREFIX) or \
@@ -75,7 +79,8 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         if is_openai_direct_model: # This check is based on request.model, so it's fine here
             # If it was an OpenAI direct model, its base name is request.model minus suffix.
             # We need to ensure PAY_PREFIX or EXPRESS_PREFIX are also stripped if they were part of the original.
-            temp_base_for_openai = request.model[:-len(OPENAI_DIRECT_SUFFIX)]
+            suffix_to_remove = OPENAI_SEARCH_SUFFIX if is_openai_search_model else OPENAI_DIRECT_SUFFIX
+            temp_base_for_openai = request.model[:-len(suffix_to_remove)]
             if temp_base_for_openai.startswith(EXPRESS_PREFIX):
                 temp_base_for_openai = temp_base_for_openai[len(EXPRESS_PREFIX):]
             if temp_base_for_openai.startswith(PAY_PREFIX):
@@ -187,10 +192,10 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             # Use the new OpenAI handler
             if is_express_model_request:
                 openai_handler = OpenAIDirectHandler(express_key_manager=express_key_manager_instance)
-                return await openai_handler.process_request(request, base_model_name, is_express=True)
+                return await openai_handler.process_request(request, base_model_name, is_express=True, is_openai_search=is_openai_search_model)
             else:
                 openai_handler = OpenAIDirectHandler(credential_manager=credential_manager_instance)
-                return await openai_handler.process_request(request, base_model_name)
+                return await openai_handler.process_request(request, base_model_name, is_openai_search=is_openai_search_model)
         elif is_auto_model:
             print(f"Processing auto model: {request.model}")
             attempts = [

@@ -140,21 +140,23 @@ class OpenAIDirectHandler:
             api_key=gcp_token,  # OAuth token
         )
     
-    def prepare_openai_params(self, request: OpenAIRequest, model_id: str) -> Dict[str, Any]:
-        """Prepare parameters for OpenAI API call."""
-        params = {
-            "model": model_id,
-            "messages": [msg.model_dump(exclude_unset=True) for msg in request.messages],
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
-            "top_p": request.top_p,
-            "stream": request.stream,
-            "stop": request.stop,
-            "seed": request.seed,
-            "n": request.n,
-        }
-        # Remove None values
-        return {k: v for k, v in params.items() if v is not None}
+    def prepare_openai_params(self, request: OpenAIRequest, model_id: str, is_openai_search: bool = False) -> Dict[str, Any]:
+        """
+        Prepare parameters for OpenAI API call by converting the request to a dictionary,
+        and then overriding the model. This is more robust than manually picking parameters.
+        """
+        # Convert the request to a dict, excluding unset values. `None` values inside
+        # nested models (like messages) are preserved.
+        params = request.model_dump(exclude_unset=True)
+        
+        # Update model and filter out top-level None values.
+        params['model'] = model_id
+        
+        if is_openai_search:
+            params['web_search_options'] = {}
+            
+        return {k: v for k, v in params.items() if (v is not None and k is not "model")}
+    
     
     def prepare_extra_body(self) -> Dict[str, Any]:
         """Prepare extra body parameters for OpenAI API call."""
@@ -171,7 +173,7 @@ class OpenAIDirectHandler:
         }
     
     async def handle_streaming_response(
-        self, 
+        self,
         openai_client: Any, # Can be openai.AsyncOpenAI or our wrapper
         openai_params: Dict[str, Any],
         openai_extra_body: Dict[str, Any],
@@ -398,7 +400,7 @@ class OpenAIDirectHandler:
                 content=create_openai_error_response(500, error_msg, "server_error")
             )
     
-    async def process_request(self, request: OpenAIRequest, base_model_name: str, is_express: bool = False):
+    async def process_request(self, request: OpenAIRequest, base_model_name: str, is_express: bool = False, is_openai_search: bool = False):
         """Main entry point for processing OpenAI Direct mode requests."""
         print(f"INFO: Using OpenAI Direct Path for model: {request.model} (Express: {is_express})")
         
@@ -434,7 +436,7 @@ class OpenAIDirectHandler:
                 client = self.create_openai_client(rotated_project_id, gcp_token)
 
             model_id = f"google/{base_model_name}"
-            openai_params = self.prepare_openai_params(request, model_id)
+            openai_params = self.prepare_openai_params(request, model_id, is_openai_search)
             openai_extra_body = self.prepare_extra_body()
             
             if request.stream:
