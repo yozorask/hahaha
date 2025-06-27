@@ -1,8 +1,8 @@
 import json
-import asyncio # Added for await
 from google import genai
 from credentials_manager import CredentialManager, parse_multiple_json_credentials
 import config as app_config
+from google.generativeai.client import types
 from model_loader import refresh_models_config_cache # Import new model loader function
 
 # VERTEX_EXPRESS_MODELS list is now dynamically loaded via model_loader
@@ -10,6 +10,16 @@ from model_loader import refresh_models_config_cache # Import new model loader f
 # Consumers should use get_vertex_express_models() from model_loader.
 
 # Global 'client' and 'get_vertex_client()' are removed.
+
+def _get_http_options() -> Optional[types.HttpOptions]:
+    """Get http options from config."""
+    if app_config.SOCKS_PROXY:
+        return types.HttpOptions(
+            client_args={'proxy': app_config.SOCKS_PROXY},
+            async_client_args={'proxy': app_config.SOCKS_PROXY},
+        )
+    return None
+
 
 async def init_vertex_ai(credential_manager_instance: CredentialManager) -> bool: # Made async
     """
@@ -85,7 +95,11 @@ async def init_vertex_ai(credential_manager_instance: CredentialManager) -> bool
             temp_creds_val, temp_project_id_val = credential_manager_instance.get_credentials()
             if temp_creds_val and temp_project_id_val:
                 try:
-                    _ = genai.Client(vertexai=True, credentials=temp_creds_val, project=temp_project_id_val, location="global")
+                    http_options = _get_http_options()
+                    if http_options:
+                        _ = genai.Client(vertexai=True, credentials=temp_creds_val, project=temp_project_id_val, location="global", http_options=http_options)
+                    else:
+                        _ = genai.Client(vertexai=True, credentials=temp_creds_val, project=temp_project_id_val, location="global")
                     print(f"INFO: Successfully validated a credential from Credential Manager (Project: {temp_project_id_val}). Initialization check passed.")
                     return True
                 except Exception as e_val:
