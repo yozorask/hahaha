@@ -80,8 +80,15 @@ class ExpressClientWrapper:
         if 'extra_body' in payload:
             payload.update(payload.pop('extra_body'))
 
-        proxy = app_config.SOCKS_PROXY or app_config.HTTPS_PROXY
-        client_args = {'timeout': 300, 'proxies': proxy}
+        proxies = None
+        if app_config.SOCKS_PROXY:
+            proxies = {"all://": app_config.SOCKS_PROXY}
+        elif app_config.HTTPS_PROXY:
+            proxies = {"https://": app_config.HTTPS_PROXY}
+
+        client_args = {'timeout': 300}
+        if proxies:
+            client_args['proxies'] = proxies
         if app_config.SSL_CERT_FILE:
             client_args['verify'] = app_config.SSL_CERT_FILE
         async with httpx.AsyncClient(**client_args) as client:
@@ -110,8 +117,15 @@ class ExpressClientWrapper:
         if 'extra_body' in payload:
             payload.update(payload.pop('extra_body'))
 
-        proxy = app_config.SOCKS_PROXY or app_config.HTTPS_PROXY
-        client_args = {'timeout': 300, 'proxies': proxy}
+        proxies = None
+        if app_config.SOCKS_PROXY:
+            proxies = {"all://": app_config.SOCKS_PROXY}
+        elif app_config.HTTPS_PROXY:
+            proxies = {"https://": app_config.HTTPS_PROXY}
+
+        client_args = {'timeout': 300}
+        if proxies:
+            client_args['proxies'] = proxies
         if app_config.SSL_CERT_FILE:
             client_args['verify'] = app_config.SSL_CERT_FILE
         async with httpx.AsyncClient(**client_args) as client:
@@ -142,10 +156,15 @@ class OpenAIDirectHandler:
             f"projects/{project_id}/locations/{location}/endpoints/openapi"
         )
         
-        proxy = app_config.SOCKS_PROXY or app_config.HTTPS_PROXY
+        proxies = None
+        if app_config.SOCKS_PROXY:
+            proxies = {"all://": app_config.SOCKS_PROXY}
+        elif app_config.HTTPS_PROXY:
+            proxies = {"https://": app_config.HTTPS_PROXY}
+
         client_args = {}
-        if proxy:
-            client_args['proxies'] = proxy
+        if proxies:
+            client_args['proxies'] = proxies
         if app_config.SSL_CERT_FILE:
             client_args['verify'] = app_config.SSL_CERT_FILE
         

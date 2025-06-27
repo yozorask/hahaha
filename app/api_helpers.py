@@ -12,7 +12,7 @@ from openai import AsyncOpenAI
 
 from models import OpenAIRequest, OpenAIMessage
 from message_processing import (
-    convert_to_openai_format, 
+    convert_to_openai_format,
     convert_chunk_to_openai,
     extract_reasoning_by_tags,
     _create_safety_ratings_html

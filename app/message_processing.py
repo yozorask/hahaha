@@ -5,7 +5,7 @@ import time
 import random # For more unique tool_call_id
 import urllib.parse
 from typing import List, Dict, Any, Tuple
-from app import config as app_config
+import config as app_config
 
 from google.genai import types
 from models import OpenAIMessage, ContentPartText, ContentPartImage

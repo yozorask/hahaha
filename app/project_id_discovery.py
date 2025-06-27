@@ -2,7 +2,7 @@ import aiohttp
 import json
 import re
 from typing import Dict, Optional
-from app import config
+import config
 
 # Global cache for project IDs: {api_key: project_id}
 PROJECT_ID_CACHE: Dict[str, str] = {}
