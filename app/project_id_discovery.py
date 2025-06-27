@@ -10,11 +10,7 @@ PROJECT_ID_CACHE: Dict[str, str] = {}
 
 def _get_proxy_url() -> Optional[str]:
     """Get proxy URL from config."""
-    if config.SOCKS_PROXY:
-        return config.SOCKS_PROXY
-    if config.HTTPS_PROXY:
-        return config.HTTPS_PROXY
-    return None
+    return config.PROXY_URL
 
 
 async def discover_project_id(api_key: str) -> str:

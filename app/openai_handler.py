@@ -81,10 +81,11 @@ class ExpressClientWrapper:
             payload.update(payload.pop('extra_body'))
 
         proxies = None
-        if app_config.SOCKS_PROXY:
-            proxies = {"all://": app_config.SOCKS_PROXY}
-        elif app_config.HTTPS_PROXY:
-            proxies = {"https://": app_config.HTTPS_PROXY}
+        if app_config.PROXY_URL:
+            if app_config.PROXY_URL.startswith("socks"):
+                proxies = {"all://": app_config.PROXY_URL}
+            else:
+                proxies = {"https://": app_config.PROXY_URL}
 
         client_args = {'timeout': 300}
         if proxies:
@@ -118,10 +119,11 @@ class ExpressClientWrapper:
             payload.update(payload.pop('extra_body'))
 
         proxies = None
-        if app_config.SOCKS_PROXY:
-            proxies = {"all://": app_config.SOCKS_PROXY}
-        elif app_config.HTTPS_PROXY:
-            proxies = {"https://": app_config.HTTPS_PROXY}
+        if app_config.PROXY_URL:
+            if app_config.PROXY_URL.startswith("socks"):
+                proxies = {"all://": app_config.PROXY_URL}
+            else:
+                proxies = {"https://": app_config.PROXY_URL}
 
         client_args = {'timeout': 300}
         if proxies:
@@ -157,10 +159,11 @@ class OpenAIDirectHandler:
         )
         
         proxies = None
-        if app_config.SOCKS_PROXY:
-            proxies = {"all://": app_config.SOCKS_PROXY}
-        elif app_config.HTTPS_PROXY:
-            proxies = {"https://": app_config.HTTPS_PROXY}
+        if app_config.PROXY_URL:
+            if app_config.PROXY_URL.startswith("socks"):
+                proxies = {"all://": app_config.PROXY_URL}
+            else:
+                proxies = {"https://": app_config.PROXY_URL}
 
         client_args = {}
         if proxies:

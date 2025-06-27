@@ -41,6 +41,5 @@ SAFETY_SCORE = os.environ.get("SAFETY_SCORE", "false").lower() == "true"
 # Validation logic moved to app/auth.py
 
 # Proxy settings
-HTTPS_PROXY = os.environ.get("HTTPS_PROXY")
-SOCKS_PROXY = os.environ.get("SOCKS_PROXY")
+PROXY_URL = os.environ.get("PROXY_URL")
 SSL_CERT_FILE = os.environ.get("SSL_CERT_FILE")
