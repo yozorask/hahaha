@@ -495,7 +495,6 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
 
     if hasattr(chunk, 'candidates') and chunk.candidates:
         candidate = chunk.candidates[0] # Process first candidate for streaming
-        print(candidate)
         raw_gemini_finish_reason = getattr(candidate, 'finish_reason', None)
         if raw_gemini_finish_reason:
             if hasattr(raw_gemini_finish_reason, 'name'): raw_gemini_finish_reason_str = raw_gemini_finish_reason.name.upper()
