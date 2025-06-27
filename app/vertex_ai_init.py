@@ -1,8 +1,9 @@
 import json
+from typing import Optional
 from google import genai
 from credentials_manager import CredentialManager, parse_multiple_json_credentials
 import config as app_config
-from google.generativeai.client import types
+from google.genai import types
 from model_loader import refresh_models_config_cache # Import new model loader function
 
 # VERTEX_EXPRESS_MODELS list is now dynamically loaded via model_loader
